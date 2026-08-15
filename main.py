@@ -79,25 +79,22 @@ def get_airport_weather(lat: float, lon: float):
 # 4. AI Analysis via Gemini 2.5 Flash
 # ---------------------------------------------------------
 def analyze_interactive_query(flight_data, weather_data, flight_num: str) -> FlightReport:
-    """Processes interactive chatbot requests with deep disruption reasoning."""
     prompt = f"""
     You are an expert aviation operations AI.
     A user requested status for Flight: {flight_num}
     
-    Live Radar Telemetry: {json.dumps(flight_data if flight_data else "No active radar track found. Flight may be scheduled or grounded.")}
+    Live Radar Telemetry: {json.dumps(flight_data if flight_data else "NO ACTIVE RADAR SIGNAL. The plane is currently grounded at gate, between flights, or transponder is off.")}
     Live Weather Data: {json.dumps(weather_data)}
     
     Tasks:
-    1. Summarize flight schedule (Origin, Destination, Times).
-    2. Assess weather hazards (winds, precipitation, cloud ceilings, visibility).
+    1. If live radar telemetry is missing, state clearly in schedule_summary that the flight is currently not airborne / on ground. Do not invent arbitrary departure times.
+    2. Assess weather hazards for the provided airport coordinates.
     3. Predict delay likelihood (0-100%) and estimated delay minutes.
-    4. Provide detailed disruption reasoning. Consider:
-       - Weather (thunderstorms, wind shear, icing).
-       - Airspace/Security (ATC congestion, drone alerts, unidentified flying hazards, airspace locks).
-       - Operations (maintenance issues, late arriving aircraft).
+    4. Provide detailed disruption reasoning (ATC, ground holds, inbound aircraft delays, weather).
     """
+    
     response = client.models.generate_content(
-        model='gemini-3.6-flash',
+        model='gemini-1.5-flash', # Or gemini-2.0-flash
         contents=prompt,
         config={
             'response_mime_type': 'application/json',
@@ -133,13 +130,21 @@ def send_welcome(message):
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
+@bot.message_handler(func=lambda message: True)
 def handle_flight_search(message):
     flight_num = message.text.strip().upper()
     status_msg = bot.reply_to(message, f"🔍 Querying live radar and weather for **{flight_num}**...")
     
     flight_data = get_specific_flight(flight_num)
     
-    lat, lon = 51.4700, -0.4543  # Default London coordinates if unlisted
+    # Smart Regional Fallback based on Airline Prefix
+    # Default to Vietnam (Hanoi/Ho Chi Minh region) for VJ (VietJet) or VN (Vietnam Airlines)
+    if flight_num.startswith("VJ") or flight_num.startswith("VN"):
+        lat, lon = 21.2212, 105.8072  # Hanoi (HAN) coordinates
+    else:
+        lat, lon = 51.4700, -0.4543   # London Heathrow default
+
+    # If active radar tracking IS found, extract exact aircraft coordinates
     if flight_data and 'airport' in flight_data:
         try:
             lat = flight_data['airport']['origin']['position']['latitude']
@@ -147,11 +152,13 @@ def handle_flight_search(message):
         except KeyError:
             pass
             
+    # Fetch real-time weather for the correct airport coordinates
     weather_data = get_airport_weather(lat, lon)
     
     try:
         report: FlightReport = analyze_interactive_query(flight_data, weather_data, flight_num)
-        status_emoji = "🟢" if report.status == "ON_TIME" else "🔴"
+        
+        status_emoji = "🟢" if report.status == "ON_TIME" else ("🟡" if report.status == "UNKNOWN" else "🔴")
         
         reply = (
             f"✈️ **FLIGHT REPORT: {report.flight_id.upper()}**\n\n"
@@ -159,7 +166,7 @@ def handle_flight_search(message):
             f"📈 **Delay Likelihood:** {report.delay_probability_percent}%\n"
             f"⏱️ **Predicted Delay:** +{report.predicted_delay_minutes} mins\n\n"
             f"📅 **Schedule Summary:**\n{report.schedule_summary}\n\n"
-            f"🌤️ **Weather Assessment:**\n{report.weather_summary}\n\n"
+            f"🌤️ **Regional Weather Assessment:**\n{report.weather_summary}\n\n"
             f"🔍 **Detailed Reason & Risk Analysis:**\n{report.detailed_reasons}"
         )
         bot.edit_message_text(reply, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
