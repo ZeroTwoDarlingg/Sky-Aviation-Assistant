@@ -130,7 +130,6 @@ def send_welcome(message):
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
-@bot.message_handler(func=lambda message: True)
 def handle_flight_search(message):
     flight_num = message.text.strip().upper()
     status_msg = bot.reply_to(message, f"🔍 Querying live radar and weather for **{flight_num}**...")
