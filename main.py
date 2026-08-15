@@ -80,21 +80,21 @@ def get_airport_weather(lat: float, lon: float):
 # ---------------------------------------------------------
 def analyze_interactive_query(flight_data, weather_data, flight_num: str) -> FlightReport:
     prompt = f"""
-    You are an expert aviation operations AI.
-    A user requested status for Flight: {flight_num}
+    You are an aviation operations AI. Analyze ONLY the verified live data provided below.
+    CRITICAL RULE: DO NOT invent schedule times, routes, or origins if they are not in the JSON data.
     
-    Live Radar Telemetry: {json.dumps(flight_data if flight_data else "NO ACTIVE RADAR SIGNAL. The plane is currently grounded at gate, between flights, or transponder is off.")}
+    Flight Identifier: {flight_num}
+    Live Radar Data: {json.dumps(flight_data)}
     Live Weather Data: {json.dumps(weather_data)}
     
     Tasks:
-    1. If live radar telemetry is missing, state clearly in schedule_summary that the flight is currently not airborne / on ground. Do not invent arbitrary departure times.
-    2. Assess weather hazards for the provided airport coordinates.
-    3. Predict delay likelihood (0-100%) and estimated delay minutes.
-    4. Provide detailed disruption reasoning (ATC, ground holds, inbound aircraft delays, weather).
+    1. Extract Origin and Destination directly from Live Radar Data.
+    2. Assess weather hazards using ONLY the provided Live Weather Data.
+    3. Calculate delay likelihood percentage based strictly on actual speed, altitude, and weather metrics.
     """
     
     response = client.models.generate_content(
-        model='gemini-1.5-flash', # Or gemini-2.0-flash
+        model='gemini-1.5-flash', # or gemini-2.0-flash
         contents=prompt,
         config={
             'response_mime_type': 'application/json',
@@ -132,32 +132,40 @@ def send_welcome(message):
 @bot.message_handler(func=lambda message: True)
 def handle_flight_search(message):
     flight_num = message.text.strip().upper()
-    status_msg = bot.reply_to(message, f"🔍 Querying live radar and weather for **{flight_num}**...")
+    status_msg = bot.reply_to(message, f"🔍 Checking live radar for **{flight_num}**...")
     
+    # 1. Fetch live radar tracking
     flight_data = get_specific_flight(flight_num)
     
-    # Smart Regional Fallback based on Airline Prefix
-    # Default to Vietnam (Hanoi/Ho Chi Minh region) for VJ (VietJet) or VN (Vietnam Airlines)
-    if flight_num.startswith("VJ") or flight_num.startswith("VN"):
-        lat, lon = 21.2212, 105.8072  # Hanoi (HAN) coordinates
-    else:
-        lat, lon = 51.4700, -0.4543   # London Heathrow default
+    # 🛡️ GUARDRAIL: If flight is not actively airborne on radar, do NOT let AI guess!
+    if not flight_data:
+        reply = (
+            f"✈️ **FLIGHT REPORT: {flight_num}**\n\n"
+            f"🟡 **Status:** GROUNDED / NOT ON RADAR\n\n"
+            f"⚠️ **Live Tracking Unavailable:**\n"
+            f"Aircraft is currently parked at the gate, grounded, or transponder is off.\n\n"
+            f"💡 *Free radar tracking APIs only broadcast data when an aircraft is actively airborne. "
+            f"AI delay predictions are disabled when live radar is inactive to prevent inaccurate reports.*"
+        )
+        bot.edit_message_text(reply, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+        return
 
-    # If active radar tracking IS found, extract exact aircraft coordinates
-    if flight_data and 'airport' in flight_data:
-        try:
-            lat = flight_data['airport']['origin']['position']['latitude']
-            lon = flight_data['airport']['origin']['position']['longitude']
-        except KeyError:
-            pass
+    # 2. Extract REAL coordinates from verified live telemetry
+    try:
+        lat = flight_data['airport']['origin']['position']['latitude']
+        lon = flight_data['airport']['origin']['position']['longitude']
+        origin_name = flight_data['airport']['origin']['name']
+    except KeyError:
+        lat, lon = 21.2212, 105.8072
+        origin_name = "Origin Airport"
             
-    # Fetch real-time weather for the correct airport coordinates
+    # 3. Fetch real weather at the actual aircraft position/airport
     weather_data = get_airport_weather(lat, lon)
     
+    # 4. Pass ONLY verified real data to Gemini
     try:
         report: FlightReport = analyze_interactive_query(flight_data, weather_data, flight_num)
-        
-        status_emoji = "🟢" if report.status == "ON_TIME" else ("🟡" if report.status == "UNKNOWN" else "🔴")
+        status_emoji = "🟢" if report.status == "ON_TIME" else "🔴"
         
         reply = (
             f"✈️ **FLIGHT REPORT: {report.flight_id.upper()}**\n\n"
@@ -165,8 +173,8 @@ def handle_flight_search(message):
             f"📈 **Delay Likelihood:** {report.delay_probability_percent}%\n"
             f"⏱️ **Predicted Delay:** +{report.predicted_delay_minutes} mins\n\n"
             f"📅 **Schedule Summary:**\n{report.schedule_summary}\n\n"
-            f"🌤️ **Regional Weather Assessment:**\n{report.weather_summary}\n\n"
-            f"🔍 **Detailed Reason & Risk Analysis:**\n{report.detailed_reasons}"
+            f"🌤️ **Weather Assessment ({origin_name}):**\n{report.weather_summary}\n\n"
+            f"🔍 **Detailed Risk Analysis:**\n{report.detailed_reasons}"
         )
         bot.edit_message_text(reply, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
     except Exception as e:
