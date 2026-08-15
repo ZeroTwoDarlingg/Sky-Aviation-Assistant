@@ -97,7 +97,7 @@ def analyze_interactive_query(flight_data, weather_data, flight_num: str) -> Fli
        - Operations (maintenance issues, late arriving aircraft).
     """
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-1.5-flash',
         contents=prompt,
         config={
             'response_mime_type': 'application/json',
@@ -110,7 +110,7 @@ def analyze_sector_monitor(flights, weather) -> AutomatedAlert:
     """Analyzes background sector telemetry for automated push alerts."""
     prompt = f"Analyze live sector flight telemetry: {json.dumps(flights)} and weather: {json.dumps(weather)}. Detect critical delay or safety risks."
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-1.5-flash',
         contents=prompt,
         config={
             'response_mime_type': 'application/json',
